@@ -1,5 +1,4 @@
-# Sporangia
-
+![Sporangia Logo](assets/Sporangia.png)
 **NOTE: Sporangia is currently under development and is not yet functional.**
 
 Sporangia is a graphical user interface (GUI) application that will allow users to edit Pokemon created in RPGMaker. The app is primarily intended to be compatible with RPGMaker games that use Pokemon Essentials.
@@ -42,3 +41,7 @@ If you encounter any issues with Sporangia, please create a new issue on the pro
 ## License
 
 Sporangia is licensed under the [MIT License](https://opensource.org/licenses/MIT). See the `LICENSE` file for more information.
+
+## Acknowledgements
+Font used in Sporangia logo is Continuum by Brøderbund Software. Found here: https://www.dafont.com/continuum.font
+
