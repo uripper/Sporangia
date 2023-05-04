@@ -6,8 +6,18 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-druid = "0.8.3"
-syn = { version = "1.0.74", features = ["full"] }
+iced = { version = "0.9.0", features = ["image", "debug", "tokio"] }
+serde_json = "1.0"
 
-[features]
-syn = ["syn/extra-traits"]
+[dependencies.serde]
+version = "1.0"
+features = ["derive"]
+
+[dependencies.reqwest]
+version = "0.11"
+default-features = false
+features = ["json", "rustls-tls"]
+
+[dependencies.rand]
+version = "0.7"
+features = ["wasm-bindgen"]
