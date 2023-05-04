@@ -5,6 +5,6 @@ mod database;
 use frontend::app::App;
 
 fn main() {
-    let app = App::new();
+    let app = App::new(55);
     app.run();
 }
