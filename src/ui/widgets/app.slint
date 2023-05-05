@@ -1,0 +1,14 @@
+import {Palette} from "src/ui/components/palette.slint";
+export component App inherits Window{
+        min-height: 600px;
+        min-width: 800px;
+        title: "Sporangia";
+        default-font-size: 50px;
+        default-font-family: "Manrope ExtraBold";
+        background: Palette.emerald;
+        property <string> state: "Splash";
+        states [
+            SplashState when state == "Splash":{
+            }
+        ]
+}

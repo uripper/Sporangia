@@ -10,3 +10,4 @@ edition = "2021"
 
 [dependencies]
 slint = "1.0.2"
+image = "*"
