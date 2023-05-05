@@ -1,9 +1,5 @@
-mod frontend;
-mod backend;
-mod database;
-
-use frontend::app;
-
+use ui::theme::Theme;
 fn main() {
-    app::main();
+    let theme = Theme::default();
+    println!("Hello, world!");
 }
