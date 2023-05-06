@@ -1,22 +1,30 @@
-slint::slint!{
-    import { Button, VerticalBox }  from "std-widgets.slint";
-    import "src/ui/fonts/Manrope-ExtraBold.otf";
-    import "src/ui/fonts/contm.ttf";
-    import {Palette} from "src/ui/components/palette.slint";
-    import {Menu} from "src/ui/widgets/menu.slint";
-    import {Splash} from "src/ui/components/splash.slint";
-
-    export component App inherits Window{
-        title: "Sporangia";
-        width: 800px;
-        height: 600px;
-        background: Palette.cherise;
-        property <string> state: "splash";
-        if(state == "splash") : Splash{}
-}
+mod ui;
+#[derive(Debug, Copy, Clone)]
+enum State{
+SplashState,
+MenuState,
+Exit,
 }
 fn main() {
-    let app = App::new().unwrap();
-    let app_weak = app.as_weak();
-    app.run().unwrap();
+    let mut state = State::SplashState;
+    loop {
+        state = state_handler(state);
+    }
+}
+fn state_handler(state: State) -> State {
+    let mut new_state = state.clone();
+    match new_state {
+        State::SplashState => {
+            ui::components::splash::run();
+            new_state = State::MenuState;
+        }
+        State::MenuState => {
+            ui::components::menu::run();
+            new_state = State::Exit;
+        }
+        State::Exit => {
+            std::process::exit(0);
+        }
+    }
+    new_state
 }
