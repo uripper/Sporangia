@@ -1,13 +1,9 @@
 [package]
-name = "Sporangia"
+name = "sporangia"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-# Copyright © SixtyFPS GmbH <info@slint-ui.com>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# SPDX-License-Identifier: MIT
 
 [dependencies]
 slint = "1.0.2"
-image = "*"
