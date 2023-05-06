@@ -1,8 +1,8 @@
 ![Sporangia Logo](assets/Sporangia.png)
 
-**NOTE: Sporangia is currently under development and is not yet functional.**
+# **NOTE: Sporangia is currently under development and is not yet functional.**
 
-Sporangia is a graphical user interface (GUI) application that will allow users to edit Pokemon created in RPGMaker. The app is primarily intended to be compatible with RPGMaker games that use Pokemon Essentials.
+### *Sporangia is an app for editing saves in Pokemon fangames made in RPGMaker.*
 
 ## Features
 
