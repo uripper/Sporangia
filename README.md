@@ -1,4 +1,4 @@
-![Sporangia Logo](assets/Sporangia.png)
+![Sporangia Logo](src/ui/assets/Sporangia.png)
 
 # **NOTE: Sporangia is currently under development and is not yet functional.**
 
