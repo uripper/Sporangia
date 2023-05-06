@@ -1,0 +1,38 @@
+slint::slint!{
+    import {VerticalBox, Button} from "std-widgets.slint";
+    import {Palette} from "src/ui/components/palette.slint";
+    export component Menu inherits Window{
+        min-height: 600px;
+        min-width: 800px;
+        title: "Sporangia";
+        default-font-size: 50px;
+        default-font-family: "Manrope ExtraBold";
+        background: button.pressed ? Palette.cherise : Palette.emerald;
+        animate background {
+            duration: 210ms;
+            }
+        VerticalBox {
+            alignment: center;
+            opacity: 100%;
+            Text{
+                vertical-alignment: top;
+                color: Palette.emerald;
+                font-family: "Continuum Medium";
+                font-size: 250px;
+                horizontal-alignment: center;
+                text: "Sporangia";}
+            button := Button{
+                    opacity: 30%; text: "Start";}
+
+                    }
+                }
+}
+
+fn main() {
+    let menu = Menu::new().unwrap();
+    menu.run().unwrap();
+}
+
+pub fn run() {
+    main()
+}

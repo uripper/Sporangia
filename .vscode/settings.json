@@ -1,0 +1,11 @@
+{
+    "cSpell.words": [
+        "cherise",
+        "slint",
+        "xlarge",
+        "xslow"
+    ],
+    "rust-analyzer.linkedProjects": [
+        ".\\Cargo.toml"
+    ]
+}
