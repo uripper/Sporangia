@@ -2,7 +2,15 @@
 
 # **NOTE: Sporangia is currently under development and is not yet functional.**
 
+## Sporangia is currently being tested for different UI Frameworks.
+## This project is currently solely developed by myself, and I am not an expert in UI.
+## If you would like to suggest a framework (I prefer a full Rust stack for this project), please open an issue.
+## I  would love to hear your suggestions and would love to have help with this project!
+
 ### *Sporangia is an app for editing saves in Pokemon fangames made in RPGMaker.*
+
+
+
 
 ## Features
 
