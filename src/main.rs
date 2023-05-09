@@ -1,4 +1,8 @@
+use std::fs::File;
+use std::path::Path;
+
 mod ui;
+mod controllers;
 #[derive(Debug, Copy, Clone)]
 enum State{
 SplashState,
@@ -27,4 +31,17 @@ fn state_handler(state: State) -> State {
         }
     }
     new_state
+}
+
+fn read_test_file() {
+    let file_path = Path::new("test_files/test.RXDATA");
+    let file = File::open(&file_path).expect("Could not open file");
+
+    let mut reader = controllers::reader::Reader::new(file);
+
+    match reader.parse() {
+        Ok(_) => println!("File parsed successfully"),
+        Err(e) => println!("Error: {}", e),
+    }
+
 }

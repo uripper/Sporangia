@@ -3,11 +3,25 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufReader, Read};
 
-#[derive(Clone)]
 struct Object {
-    class: String,
+    name: String,
     list: HashMap<String, Box<dyn Any>>,
 }
+
+impl Clone for Object {
+    fn clone(&self) -> Self {
+        let mut new_list = HashMap::new();
+        for (key, value) in &self.list {
+            let value = value.downcast_ref::<String>().unwrap().clone();
+            new_list.insert(key.clone(), Box::new(value) as Box<dyn Any>);
+        }
+        Object {
+            name: self.name.clone(),
+            list: new_list,
+        }
+    }
+}
+
 
 #[derive(Clone)]
 struct Color {
@@ -19,11 +33,10 @@ struct Color {
 
 #[derive(Clone)]
 struct Table {
-    name: String,
-    color: Color,
+    x: i32,
+    y: i32,
     width: i32,
     height: i32,
-    data: Vec<Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -31,17 +44,16 @@ struct Tone {
     red: f64,
     green: f64,
     blue: f64,
-    grey: f64,
 }
 
-struct Reader {
+pub struct Reader {
     file: BufReader<File>,
     object_cache: Vec<Box<dyn Any>>,
     symbol_cache: Vec<Vec<u8>>,
 }
 
 impl Reader {
-    fn new(file: File) -> Reader {
+    pub fn new(file: File) -> Reader {
         Reader {
             file: BufReader::new(file),
             object_cache: Vec::new(),
@@ -49,12 +61,12 @@ impl Reader {
         }
     }
 
-    fn parse(&mut self) -> io::Result<Box<dyn Any>> {
+    pub fn parse(&mut self) -> io::Result<Box<dyn Any>> {
         let mut buf = [0; 1];
         self.file.read_exact(&mut buf)?;
         let type_id = buf[0];
         match type_id {
-            b'[' => self.handle_array(),
+            b'[' => Ok(Box::new(self.handle_array()?)),
             b'l' => self.handle_bignum(),
             b'C' => self.handle_class(),
             b'd' => self.handle_data(),
@@ -85,7 +97,7 @@ impl Reader {
     }
 
     fn handle_array(&mut self) -> io::Result<Vec<Box<dyn Any>>> {
-        let length = self.read_fixnum()? as usize;
+        let length = self.handle_fixnum()? as usize;
         let mut array: Vec<Box<dyn Any>> = Vec::with_capacity(length);
         for _ in 0..length {
             let value = self.parse()?;
@@ -172,7 +184,7 @@ impl Reader {
         Ok(Box::new(false))
     }
 
-    fn handle_fixnum(&mut self) -> Result<i32, Box<dyn std::error::Error>> {
+    fn handle_fixnum(&mut self) -> io::Result< Box<dyn std::error::Error>> {
         // Read the first byte from the file
         let mut first_byte = [0u8; 1];
         self.file.read_exact(&mut first_byte)?;
@@ -228,11 +240,11 @@ impl Reader {
             }
         }
 
-        Ok(result)
+        Ok(Box::new(result))
     }
 
     fn handle_float(&mut self) -> io::Result<Box<dyn Any>> {
-        let length = self.read_fixnum()? as usize;
+        let length = self.handle_fixnum()? as usize;
         let mut buf = vec![0; length];
         self.file.read_exact(&mut buf)?;
         let s = String::from_utf8_lossy(&buf);
@@ -248,7 +260,7 @@ impl Reader {
     }
 
     fn handle_hash(&mut self) -> io::Result<Box<dyn Any>> {
-        let length = self.read_fixnum()? as usize;
+        let length = self.handle_fixnum()? as usize;
 
         let mut map: HashMap<i32, Box<dyn Any>> = HashMap::with_capacity(length);
 
@@ -369,7 +381,7 @@ impl Reader {
             }
         };
 
-        let length = self.read_fixnum()? as usize;
+        let length = self.handle_fixnum()? as usize;
 
         let mut object = Object {
             name,
@@ -421,7 +433,7 @@ impl Reader {
     }
 
     fn handle_string(&mut self) -> io::Result<Box<dyn Any>> {
-        let len = self.read_fixnum()?;
+        let len = self.handle_fixnum()?;
         let mut buf = vec![0; len as usize];
         self.file.read_exact(&mut buf)?;
         let str = String::from_utf8(buf)
@@ -444,7 +456,7 @@ impl Reader {
     }
 
     fn handle_symbol(&mut self) -> io::Result<Box<dyn Any>> {
-        let len = self.read_fixnum()?;
+        let len = self.handle_fixnum()?;
         let mut arr = vec![0; len as usize];
         self.file.read_exact(&mut arr)?;
         self.symbol_cache.push(arr.clone());
@@ -452,7 +464,7 @@ impl Reader {
     }
 
     fn handle_symlink(&mut self) -> io::Result<Box<dyn Any>> {
-        let index = self.read_fixnum()?;
+        let index = self.handle_fixnum()?;
         if index >= self.symbol_cache.len() as i32 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -467,7 +479,6 @@ impl Reader {
             red: 0.0,
             green: 0.0,
             blue: 0.0,
-            gray: 0.0,
         };
         self.file.read_exact(bytemuck::cast_slice_mut(&mut tone))?;
         Ok(Box::new(tone))
