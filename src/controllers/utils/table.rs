@@ -16,4 +16,12 @@ impl Table {
             data: Vec::new(),
         }
     }
+    pub fn clone(table: Table) -> Table {
+        Table {
+            x_size: table.x_size,
+            y_size: table.y_size,
+            z_size: table.z_size,
+            data: table.data.clone(),
+        }
+    }
 }

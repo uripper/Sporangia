@@ -13,13 +13,13 @@ use crate::controllers::utils::tone::Tone;
 use crate::controllers::utils::pure_object::PureObject;
 
 
-pub struct Reader {
+pub struct Reader<'a> {
     pub file: File,
-    pub object_cache: Vec<Arc<ReturnTypes>>,
+    pub object_cache: Vec<Arc<ReturnTypes<'a>>>,
     pub symbol_cache: Vec<Vec<u8>>,
 }
 
-impl Reader {
+impl Reader<'_> {
     pub fn new(file: File) -> Self {
         Reader {
             file,
@@ -287,18 +287,16 @@ impl Reader {
         table.x_size = self.file.read_i32::<LE>()?;
         table.y_size = self.file.read_i32::<LE>()?;
         table.z_size = self.file.read_i32::<LE>()?;
-
-        let mut table_size = 0i32;
-        table_size = self.file.read_i32::<LE>()?;
+        let table_size = self.file.read_i32::<LE>()?;
 
         table.data.resize(table_size as usize, 0);
         for i in 0..table_size {
             table.data[i as usize] = self.file.read_i16::<LE>()?;
         }
 
-        let table_obj = ReturnTypes::Table(Arc::new(table));
+        let table_obj = ReturnTypes::Table(Arc::new(&table));
         self.object_cache.push(Arc::new(table_obj.clone()));
-        Ok(ReturnTypes::Table(Arc::new(table)))
+        Ok(ReturnTypes::Table(Arc::new(&table)))
     }
 
     fn parse_tone(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
