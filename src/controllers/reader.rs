@@ -84,16 +84,15 @@ impl Reader {
         }
     }
 
-    fn handle_array(&mut self) -> io::Result<Box<dyn Any>> {
+    fn handle_array(&mut self) -> io::Result<Vec<Box<dyn Any>>> {
         let length = self.read_fixnum()? as usize;
         let mut array: Vec<Box<dyn Any>> = Vec::with_capacity(length);
         for _ in 0..length {
             let value = self.parse()?;
             array.push(value);
         }
-        let array_box = Box::new(array);
-        self.object_cache.push(array_box.clone());
-        Ok(array_box)
+        self.object_cache.push(array.clone());
+        Ok(array)
     }
 
     fn handle_bignum(&mut self) -> io::Result<Box<dyn Any>> {
@@ -192,9 +191,11 @@ impl Reader {
             }
             // If the first byte is greater than the size of an i32, it's too big
             if first_byte as usize > std::mem::size_of::<i32>() {
-                return Err("Fixnum too big".into());
+                return Err(Box::new(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Fixnum too big",
+                )));
             }
-
             // Initialize the result to 0
             result = 0;
             for i in 0..4 {
@@ -290,6 +291,18 @@ impl Reader {
         }
         let object = self.object_cache[index as usize].clone();
         let object = object.downcast::<HashMap<Vec<u8>, Box<dyn Any>>>().unwrap();
+        let object = match self.object_cache[index as usize]
+            .clone()
+            .downcast::<HashMap<Vec<u8>, Box<dyn Any>>>()
+        {
+            Ok(obj) => obj,
+            Err(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Invalid object index",
+                ))
+            }
+        };
         let mut buf = [0; 4];
         self.file.read_exact(&mut buf)?;
         let index = u32::from_be_bytes(buf);
@@ -363,8 +376,6 @@ impl Reader {
             list: HashMap::with_capacity(length),
         };
 
-        self.object_cache.push(Box::new(object.clone()));
-
         for _ in 0..length {
             let key_as_bytes = self.parse()?;
             let key = match key_as_bytes.downcast_ref::<Vec<u8>>() {
@@ -385,6 +396,8 @@ impl Reader {
             }
 
             let value = self.parse()?;
+
+            self.object_cache.push(Box::new(object.clone()));
 
             object.list.insert(key, value);
         }
