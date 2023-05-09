@@ -1,9 +1,9 @@
-use std::fs::File;
 use std::sync::Arc;
 use crate::controllers::utils::object::Object;
 use crate::controllers::utils::color::Color;
 use crate::controllers::utils::tone::Tone;
 use crate::controllers::utils::table::Table;
+use crate::controllers::utils::pure_object::PureObject;
 
 
 #[derive(Clone)]
@@ -22,22 +22,5 @@ pub enum ReturnTypes {
     Color(Arc<Color>),
     Tone(Arc<Tone>),
     Table(Arc<Table>),
-}
-
-
-
-pub struct Reader {
-    pub file: File,
-    pub object_cache: Vec<Arc<ReturnTypes>>,
-    pub symbol_cache: Vec<Vec<u8>>,
-}
-
-impl Reader {
-    pub fn new(file: File) -> Self {
-        Reader {
-            file,
-            object_cache: Vec::new(),
-            symbol_cache: Vec::new(),
-        }
-    }
+    PureObject(Arc<PureObject>),
 }
