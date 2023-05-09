@@ -1,0 +1,23 @@
+-------------------- Auto-Git Log --------------------
+Tue May 09 2023 14:11:43 GMT-0600 (Mountain Daylight Time)
+------------------------------------------------------
+
+Modified files:
+* .idea/rpg_save_editor.iml
+* src/controllers/reader.rs
+* src/main.rs
+
+
+Created files:
+* .idea/.gitignore
+* .idea/inspectionProfiles/Project_Default.xml
+* .idea/misc.xml
+* .idea/modules.xml
+* .idea/rpg_save_editor.iml
+* .idea/vcs.xml
+
+
+Deleted files:
+
+
+Renamed files:
