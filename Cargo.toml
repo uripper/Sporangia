@@ -7,4 +7,5 @@ edition = "2021"
 
 [dependencies]
 bytemuck = "1.13.1"
+byteorder = "1.4.3"
 slint = "1.0.2"

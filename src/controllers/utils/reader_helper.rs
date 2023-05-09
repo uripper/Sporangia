@@ -1,10 +1,10 @@
-use std::any::Any;
 use std::fs::File;
 use std::sync::Arc;
 use crate::controllers::utils::object::Object;
 use crate::controllers::utils::color::Color;
 use crate::controllers::utils::tone::Tone;
 use crate::controllers::utils::table::Table;
+
 
 #[derive(Clone)]
 pub enum ReturnTypes {
@@ -14,7 +14,7 @@ pub enum ReturnTypes {
     Int(Arc<i32>),
     String(Arc<String>),
     Array(Arc<Vec<Arc<ReturnTypes>>>),
-    Hash(Arc<std::collections::HashMap<i32,Arc<dyn Any>>>),
+    Hash(Arc<std::collections::HashMap<i32,Arc<ReturnTypes>>>),
     Object(Arc<Object>),
     Symbol(Arc<Vec<u8>>),
     Link(Arc<usize>),
@@ -23,6 +23,8 @@ pub enum ReturnTypes {
     Tone(Arc<Tone>),
     Table(Arc<Table>),
 }
+
+
 
 pub struct Reader {
     pub file: File,

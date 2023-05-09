@@ -1,5 +1,7 @@
+use byteorder::{ReadBytesExt, LE};
 use std::any::Any;
 use std::any::TypeId;
+use std::io::IoSlice;
 use std::io::{Read, Seek, SeekFrom};
 use std::slice;
 use std::sync::Arc;
@@ -85,62 +87,64 @@ impl Reader {
         Ok(ReturnTypes::Int(Arc::new(num)))
     }
 
-    fn read_fixnum(&mut self) -> Result<i32, Box<dyn std::error::Error>> {
-        let mut c = [0u8];
-        self.file.read_exact(&mut c)?;
-        let c = c[0] as i8;
+fn read_fixnum(&mut self) -> Result<i32, Box<dyn std::error::Error>> {
+    let mut byte_buffer = [0u8];
+    self.file.read_exact(&mut byte_buffer)?;
+    let mut byte_count = byte_buffer[0] as i8;
 
-        let x;
-        if c == 0 {
-            return Ok(0);
-        } else if c > 0 {
-            if 4 < c && c < 128 {
-                return Ok((c - 5) as i32);
-            }
-            if c as usize > std::mem::size_of::<i32>() {
-                return Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Fixnum too big: {}", c),
-                )));
-            }
-
-            x = 0;
-            for _ in 0..4 {
-                let mut b = [0u8];
-                self.file.read_exact(&mut b)?;
-                x = (if c > 0 {
-                    b[0] as u32
-                } << 24)
-                    | (x >> 8);
-                c -= 1;
-            }
-        } else {
-            if -129 < c && c < -4 {
-                return Ok((c + 5) as i32);
-            }
-            c = -c;
-            if c as usize > std::mem::size_of::<i32>() {
-                return Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("Fixnum too big: {}", c),
-                )));
-            }
-
-            x = !0;
-            const MASK: u32 = !(0xff << 24);
-            for _ in 0..4 {
-                let mut b = [0u8];
-                self.file.read_exact(&mut b)?;
-                x = (if c > 0 {
-                    b[0] as u32
-                } << 24)
-                    | ((x >> 8) & MASK);
-                c -= 1;
-            }
+    let mut result;
+    if byte_count == 0 {
+        return Ok(0);
+    } else if byte_count > 0 {
+        if 4 < byte_count && byte_count < 128 {
+            return Ok((byte_count - 5) as i32);
+        }
+        if byte_count as usize > std::mem::size_of::<i32>() {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Fixnum too big: {}", byte_count),
+            )));
         }
 
-        Ok(x as i32)
+        result = 0;
+        for _ in 0..4 {
+            let mut byte = [0u8];
+            self.file.read_exact(&mut byte)?;
+            if byte_count > 0 {
+                result = (byte[0] as u32 << 24) | (result >> 8);
+                byte_count -= 1;
+            } else {
+                result = result >> 8;
+            }
+        }
+    } else {
+        if -129 < byte_count && byte_count < -4 {
+            return Ok((byte_count + 5) as i32);
+        }
+        byte_count = -byte_count;
+        if byte_count as usize > std::mem::size_of::<i32>() {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Fixnum too big: {}", byte_count),
+            )));
+        }
+
+        result = !0;
+        const MASK: u32 = !(0xff << 24);
+        for _ in 0..4 {
+            let mut byte = [0u8];
+            self.file.read_exact(&mut byte)?;
+            if byte_count > 0 {
+                result = (byte[0] as u32 << 24) | ((result >> 8) & MASK);
+                byte_count -= 1;
+            } else {
+                result = (result >> 8) & MASK;
+            }
+        }
     }
+
+    Ok(result as i32)
+}
 
     fn parse_float(&mut self) -> Result<Arc<f64>, Box<dyn std::error::Error>> {
         let length = self.read_fixnum()?;
@@ -158,7 +162,7 @@ impl Reader {
         };
 
         let float_obj = Arc::new(v);
-        let return_type_float =  ReturnTypes::Float(float_obj.clone());
+        let return_type_float = ReturnTypes::Float(float_obj.clone());
         self.object_cache.push(Arc::new(return_type_float));
         Ok(float_obj)
     }
@@ -184,160 +188,119 @@ impl Reader {
             arr.push(Arc::new(elem));
         }
 
-        self.object_cache.push(Arc::new(ReturnTypes::Array(Arc::new(arr.clone()))));
+        self.object_cache
+            .push(Arc::new(ReturnTypes::Array(Arc::new(arr.clone()))));
         let array_obj = Arc::new(arr);
         let arc_vec_array_obj = Arc::new(ReturnTypes::Array(array_obj.clone()));
         self.object_cache.push(arc_vec_array_obj.clone());
         Ok(ReturnTypes::Array(array_obj))
     }
 
-    fn try_fixnum(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
+    fn try_fixnum(&mut self) -> Result<i32, Box<dyn std::error::Error>> {
         {
             if self.read_fixnum()? != 0 {
                 println!("Not Fixnum");
-                return Ok(ReturnTypes::Null(None.into()));
-            }
-            else {
-                Ok(ReturnTypes::Int(Arc::new(0)))
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Not Fixnum",
+                )));
+            } else {
+                self.read_fixnum()
             }
         }
     }
 
-
     fn parse_hash(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
         let length = self.read_fixnum()?;
-        let mut map: std::collections::HashMap<i32, Arc<(dyn Any + 'static)>> =
+        let mut map: std::collections::HashMap<i32, Arc<ReturnTypes>> =
             std::collections::HashMap::new();
-        self.object_cache.push(Arc::new(ReturnTypes::Hash(Arc::new(map).clone())));
+        let return_map = ReturnTypes::Hash(Arc::new(map.clone()));
+        self.object_cache
+            .push(Arc::new(ReturnTypes::Hash(Arc::new(map).clone())));
 
         for _ in 0..length {
             let key_any = self.try_fixnum()?;
-            if key_any == ReturnTypes::Null(None.into()) {
-                return Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Hash key not Fixnum",
-                )));
-            }
-            else {
-                let key = key_any;
-                let value = self.parse()?;
-                map.insert(key, value);
-            }
+            let key = key_any;
+            let value = self.parse()?;
+            map.insert(key, Arc::new(value));
         }
 
         let hash_obj = Arc::new(map);
-        self.object_cache.push(hash_obj.clone());
-        Ok(hash_obj)
+        let return_type_hash = Arc::new(ReturnTypes::Hash(hash_obj.clone()));
+        self.object_cache.push(return_type_hash.clone());
+        Ok(ReturnTypes::Hash(hash_obj))
     }
 
     fn parse_userdef(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
         let pname = self.parse()?;
-        let name = if pname.type_id() == TypeId::of::<Vec<u8>>() {
-            String::from_utf8(Arc::try_unwrap(pname).unwrap_or_else(|a| (*a).clone()))?
-        } else {
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "UserDef name not Symbol",
-            )));
+        let name = match pname {
+            ReturnTypes::Symbol(s) => String::from_utf8(s.to_vec())?,
+            _ => {
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "UserDef name not Symbol",
+                )))
+            }
         };
 
         let size = self.read_fixnum()?;
-        match determined_type {
-            "Color" => self.parse_color().map(ReturnTypes::Color),
-            "Table" => self.parse_table().map(ReturnTypes::Table),
-            "Tone" => self.parse_tone().map(ReturnTypes::Tone),
-            "Object" => self.parse_object().map(ReturnTypes::Object),
+        match name.as_str() {
+            "Color" => self.parse_color(),
+            "Table" => self.parse_table(),
+            "Tone" => self.parse_tone(),
+            "Object" => self.parse_object(),
             _ => Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("Unknown user-defined type: {}", determined_type),
+                format!("Unknown user-defined type: {}", name),
             ))),
         }
-        if name == "Color" {
-            let mut color = Color::default();
-            self.file.read_exact(slice::from_raw_parts_mut(
-                (&mut color.red) as *mut f64 as *mut u8,
-                8,
-            ))?;
-            self.file.read_exact(slice::from_raw_parts_mut(
-                (&mut color.green) as *mut f64 as *mut u8,
-                8,
-            ))?;
-            self.file.read_exact(slice::from_raw_parts_mut(
-                (&mut color.blue) as *mut f64 as *mut u8,
-                8,
-            ))?;
-            self.file.read_exact(slice::from_raw_parts_mut(
-                (&mut color.alpha) as *mut f64 as *mut u8,
-                8,
-            ))?;
-
-            let color_obj = Arc::new(color);
-            self.object_cache.push(color_obj.clone());
-            Ok(color_obj)
-        } else if name == "Table" {
-            let mut table = Table::default();
-            self.file.seek(SeekFrom::Current(4))?;
-            self.file.read_exact(slice::from_raw_parts_mut(
-                (&mut table.x_size) as *mut i32 as *mut u8,
-                4,
-            ))?;
-            self.file.read_exact(slice::from_raw_parts_mut(
-                (&mut table.y_size) as *mut i32 as *mut u8,
-                4,
-            ))?;
-            self.file.read_exact(slice::from_raw_parts_mut(
-                (&mut table.z_size) as *mut i32 as *mut u8,
-                4,
-            ))?;
-
-            let mut table_size = 0i32;
-            self.file.read_exact(slice::from_raw_parts_mut(
-                (&mut table_size) as *mut i32 as *mut u8,
-                4,
-            ))?;
-
-            table.data.resize(table_size as usize);
-            for i in 0..table_size {
-                let mut data = 0i16;
-                self.file.read_exact(slice::from_raw_parts_mut(
-                    (&mut data) as *mut i16 as *mut u8,
-                    2,
-                ))?;
-                table.data[i as usize] = data;
-            }
-
-            let table_obj = Arc::new(table);
-            self.object_cache.push(table_obj.clone());
-            Ok(table_obj)
-        } else if name == "Tone" {
-            let mut tone = Tone::default();
-            self.file.read_exact(slice::from_raw_parts_mut(
-                (&mut tone.red) as *mut f64 as *mut u8,
-                8,
-            ))?;
-            self.file.read_exact(slice::from_raw_parts_mut(
-                (&mut tone.green) as *mut f64 as *mut u8,
-                8,
-            ))?;
-            self.file.read_exact(slice::from_raw_parts_mut(
-                (&mut tone.blue) as *mut f64 as *mut u8,
-                8,
-            ))?;
-            self.file.read_exact(slice::from_raw_parts_mut(
-                (&mut tone.gray) as *mut f64 as *mut u8,
-                8,
-            ))?;
-
-            let tone_obj = Arc::new(tone);
-            self.object_cache.push(tone_obj.clone());
-            Ok(tone_obj)
-        } else {
-            Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Unsupported user defined class: {}", name),
-            )))
-        }
     }
+
+    fn parse_color(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
+        let mut color = Color::default();
+        color.red = self.file.read_f64::<LE>()?;
+        color.green = self.file.read_f64::<LE>()?;
+        color.blue = self.file.read_f64::<LE>()?;
+        color.alpha = self.file.read_f64::<LE>()?;
+
+        let color_obj = Arc::new(color);
+        self.object_cache
+            .push(ReturnTypes::Color(color_obj.clone()));
+        Ok(ReturnTypes::Color(color_obj))
+    }
+
+    fn parse_table(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
+        let mut table = Table::default();
+        table.x_size = self.file.read_i32::<LE>()?;
+        table.y_size = self.file.read_i32::<LE>()?;
+        table.z_size = self.file.read_i32::<LE>()?;
+
+        let mut table_size = 0i32;
+        table_size = self.file.read_i32::<LE>()?;
+
+        table.data.resize(table_size as usize, 0);
+        for i in 0..table_size {
+            table.data[i as usize] = self.file.read_i16::<LE>()?;
+        }
+
+        let table_obj = Arc::new(table);
+        self.object_cache
+            .push(ReturnTypes::Table(table_obj.clone()));
+        Ok(ReturnTypes::Table(table_obj))
+    }
+
+    fn parse_tone(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
+        let mut tone = Tone::default();
+        tone.red = self.file.read_f64::<LE>()?;
+        tone.green = self.file.read_f64::<LE>()?;
+        tone.blue = self.file.read_f64::<LE>()?;
+        tone.gray = self.file.read_f64::<LE>()?;
+
+        let tone_obj = Arc::new(tone);
+        self.object_cache.push(ReturnTypes::Tone(tone_obj.clone()));
+        Ok(ReturnTypes::Tone(tone_obj))
+    }
+
 
     fn parse_object(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
         let name = self.parse()?;
