@@ -1,8 +1,8 @@
 use std::any::Any;
-use std::io::{Read, Seek, SeekFrom};
-use std::sync::Arc;
 use std::any::TypeId;
+use std::io::{Read, Seek, SeekFrom};
 use std::slice;
+use std::sync::Arc;
 
 use crate::controllers::utils::color::Color;
 use crate::controllers::utils::object::Object;
@@ -34,20 +34,20 @@ impl Reader {
         let type_char = byte[0] as char;
 
         match type_char {
-            '@' => self.parse_link().map(ReturnTypes::Link),
-            'I' => self.parse_ivar().map(ReturnTypes::Object),
-            '0' => Ok(ReturnTypes::Null(None)),
-            'T' => Ok(ReturnTypes::Bool(true)),
-            'F' => Ok(ReturnTypes::Bool(false)),
-            'i' => self.parse_fixnum().map(ReturnTypes::Int),
-            'f' => self.parse_float().map(ReturnTypes::Float),
-            '"' => self.parse_string().map(ReturnTypes::String),
-            '[' => self.parse_array().map(ReturnTypes::Array),
-            '{' => self.parse_hash().map(ReturnTypes::Hash),
+            '@' => self.parse_link(),
+            'I' => self.parse_ivar(),
+            '0' => Ok(ReturnTypes::Null(Arc::new(None))),
+            'T' => Ok(ReturnTypes::Bool(Arc::new(true))),
+            'F' => Ok(ReturnTypes::Bool(Arc::new(false))),
+            'i' => self.parse_fixnum(),
+            'f' => self.parse_float(),
+            '"' => self.parse_string(),
+            '[' => self.parse_array(),
+            '{' => self.parse_hash(),
             'u' => self.parse_userdef(),
-            'o' => self.parse_object().map(ReturnTypes::Object),
-            ':' => self.parse_symbol().map(ReturnTypes::Symbol),
-            ';' => self.parse_symlink().map(ReturnTypes::Symlink),
+            'o' => self.parse_object(),
+            ':' => self.parse_symbol(),
+            ';' => self.parse_symlink(),
             _ => Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Unknown Value: {}", type_char),
@@ -55,19 +55,20 @@ impl Reader {
         }
     }
 
-    fn parse_link(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
-        let index = self.parse_fixnum()?;
-        if let Some(val) = self.object_cache.get(index as usize) {
-            Ok(val.clone())
-        } else {
-            Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Link index out of range",
-            )))
-        }
+   fn parse_link(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
+    let index = self.parse_fixnum()?;
+    if let Some(val) = self.object_cache.get(index as usize) {
+        Ok(ReturnTypes::Link(Arc::new(*val)))
+    } else {
+        Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Link index out of range",
+        )))
     }
+}
 
-    fn parse_ivar(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+
+    fn parse_ivar(&mut self) -> Result<Arc<Object>, Box<dyn std::error::Error>> {
         let name = self.parse()?;
         if name.type_id() != TypeId::of::<String>() {
             return Err(Box::new(std::io::Error::new(
@@ -92,13 +93,12 @@ impl Reader {
             };
 
             let _value = self.parse();
-            // TODO: Do something with the character encoding
         }
 
         Ok(name)
     }
 
-    fn parse_fixnum(&mut self) -> Result<i32, Box<dyn std::error::Error>> {
+    fn parse_fixnum(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
         let mut c = [0u8];
         self.file.read_exact(&mut c)?;
         let c = c[0] as i8;
@@ -155,7 +155,7 @@ impl Reader {
         Ok(x as i32)
     }
 
-    fn parse_float(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+    fn parse_float(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
         let length = self.parse_fixnum()?;
         let mut buf = vec![0u8; length as usize];
         self.file.read_exact(&mut buf)?;
@@ -175,7 +175,7 @@ impl Reader {
         Ok(float_obj)
     }
 
-    fn parse_string(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+    fn parse_string(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
         let length = self.parse_fixnum()? as usize;
         let mut buf = vec![0u8; length];
         self.file.read_exact(&mut buf)?;
@@ -186,7 +186,7 @@ impl Reader {
         Ok(string_obj)
     }
 
-    fn parse_array(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+    fn parse_array(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
         let len = self.parse_fixnum()?;
         let mut arr: Vec<Arc<dyn Any>> = Vec::with_capacity(len as usize);
         self.object_cache.push(Arc::new(arr.clone()));
@@ -226,7 +226,7 @@ impl Reader {
         Ok(hash_obj)
     }
 
-    fn parse_userdef(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+    fn parse_userdef(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
         let pname = self.parse()?;
         let name = if pname.type_id() == TypeId::of::<Vec<u8>>() {
             String::from_utf8(Arc::try_unwrap(pname).unwrap_or_else(|a| (*a).clone()))?
@@ -238,16 +238,16 @@ impl Reader {
         };
 
         let size = self.parse_fixnum()?;
-    match determined_type {
-        "Color" => self.parse_color().map(ReturnTypes::Color),
-        "Table" => self.parse_table().map(ReturnTypes::Table),
-        "Tone" => self.parse_tone().map(ReturnTypes::Tone),
-        "Object" => self.parse_object().map(ReturnTypes::Object),
-        _ => Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("Unknown user-defined type: {}", determined_type),
-        ))),
-    }
+        match determined_type {
+            "Color" => self.parse_color().map(ReturnTypes::Color),
+            "Table" => self.parse_table().map(ReturnTypes::Table),
+            "Tone" => self.parse_tone().map(ReturnTypes::Tone),
+            "Object" => self.parse_object().map(ReturnTypes::Object),
+            _ => Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Unknown user-defined type: {}", determined_type),
+            ))),
+        }
         if name == "Color" {
             let mut color = Color::default();
             self.file.read_exact(slice::from_raw_parts_mut(
@@ -335,7 +335,7 @@ impl Reader {
         }
     }
 
-    fn parse_object(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+    fn parse_object(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
         let name = self.parse()?;
         let name = if name.type_id() == TypeId::of::<Vec<u8>>() {
             String::from_utf8(Arc::try_unwrap(name).unwrap_or_else(|a| (*a).clone()))?
@@ -377,7 +377,7 @@ impl Reader {
         Ok(Arc::new(o))
     }
 
-    fn parse_symbol(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+    fn parse_symbol(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
         let length = self.parse_fixnum()? as usize;
         let mut buf = vec![0u8; length];
         self.file.read_exact(&mut buf)?;
@@ -387,7 +387,7 @@ impl Reader {
         Ok(symbol)
     }
 
-    fn parse_symlink(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+    fn parse_symlink(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
         let index = self.parse_fixnum()? as usize;
         if let Some(symbol) = self.symbol_cache.get(index) {
             Ok(symbol.clone())
