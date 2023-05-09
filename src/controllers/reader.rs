@@ -10,10 +10,11 @@ use crate::controllers::utils::reader_helper::Reader;
 use crate::controllers::utils::table::Table;
 use crate::controllers::utils::tone::Tone;
 
+#[derive(Clone)]
 enum ReturnTypes {
     Null(Arc<Option<()>>),
     Bool(Arc<bool>),
-    Float(Arc<f32>),
+    Float(Arc<f64>),
     Int(Arc<i32>),
     String(Arc<String>),
     Array(Arc<Vec<Arc<dyn Any>>>),
@@ -35,15 +36,15 @@ impl Reader {
 
         match type_char {
             '@' => self.parse_link(),
-            'I' => self.parse_ivar(),
+            'I' => Ok(ReturnTypes::Object(self.parse_ivar()?)),
             '0' => Ok(ReturnTypes::Null(Arc::new(None))),
             'T' => Ok(ReturnTypes::Bool(Arc::new(true))),
             'F' => Ok(ReturnTypes::Bool(Arc::new(false))),
             'i' => self.parse_fixnum(),
-            'f' => self.parse_float(),
-            '"' => self.parse_string(),
+            'f' => Ok(ReturnTypes::Float(self.parse_float()?)),
+            '"' => Ok(ReturnTypes::String(self.parse_string()?)),
             '[' => self.parse_array(),
-            '{' => self.parse_hash(),
+            '{' => Ok(ReturnTypes::Hash(self.parse_hash()?)),
             'u' => self.parse_userdef(),
             'o' => self.parse_object(),
             ':' => self.parse_symbol(),
@@ -55,18 +56,16 @@ impl Reader {
         }
     }
 
-   fn parse_link(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
-    let index = self.parse_fixnum()?;
-    if let Some(val) = self.object_cache.get(index as usize) {
-        Ok(ReturnTypes::Link(Arc::new(*val)))
-    } else {
-        Err(Box::new(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Link index out of range",
-        )))
+    fn parse_link(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
+        let index = self.read_fixnum()?;
+        if index as usize >= self.object_cache.len() {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Link index out of range",
+            )));
+        }
+        Ok(ReturnTypes::Link(Arc::new(index as usize)))
     }
-}
-
 
     fn parse_ivar(&mut self) -> Result<Arc<Object>, Box<dyn std::error::Error>> {
         let name = self.parse()?;
@@ -77,7 +76,7 @@ impl Reader {
             )));
         }
 
-        let length = self.parse_fixnum()?;
+        let length = self.read_fixnum()?;
         self.object_cache.push(name.clone());
 
         for _ in 0..length {
@@ -99,6 +98,11 @@ impl Reader {
     }
 
     fn parse_fixnum(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
+        let num = self.read_fixnum()?;
+        Ok(ReturnTypes::Int(Arc::new(num)))
+    }
+
+    fn read_fixnum(&mut self) -> Result<i32, Box<dyn std::error::Error>> {
         let mut c = [0u8];
         self.file.read_exact(&mut c)?;
         let c = c[0] as i8;
@@ -155,8 +159,8 @@ impl Reader {
         Ok(x as i32)
     }
 
-    fn parse_float(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
-        let length = self.parse_fixnum()?;
+    fn parse_float(&mut self) -> Result<Arc<f64>, Box<dyn std::error::Error>> {
+        let length = self.read_fixnum()?;
         let mut buf = vec![0u8; length as usize];
         self.file.read_exact(&mut buf)?;
 
@@ -175,8 +179,8 @@ impl Reader {
         Ok(float_obj)
     }
 
-    fn parse_string(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
-        let length = self.parse_fixnum()? as usize;
+    fn parse_string(&mut self) -> Result<Arc<String>, Box<dyn std::error::Error>> {
+        let length = self.read_fixnum()? as usize;
         let mut buf = vec![0u8; length];
         self.file.read_exact(&mut buf)?;
 
@@ -187,7 +191,7 @@ impl Reader {
     }
 
     fn parse_array(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
-        let len = self.parse_fixnum()?;
+        let len = self.read_fixnum()?;
         let mut arr: Vec<Arc<dyn Any>> = Vec::with_capacity(len as usize);
         self.object_cache.push(Arc::new(arr.clone()));
 
@@ -202,7 +206,7 @@ impl Reader {
     }
 
     fn parse_hash(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
-        let length = self.parse_fixnum()?;
+        let length = self.read_fixnum()?;
         let mut map: std::collections::HashMap<i32, Arc<dyn Any>> =
             std::collections::HashMap::new();
         self.object_cache.push(Arc::new(map.clone()));
@@ -237,7 +241,7 @@ impl Reader {
             )));
         };
 
-        let size = self.parse_fixnum()?;
+        let size = self.read_fixnum()?;
         match determined_type {
             "Color" => self.parse_color().map(ReturnTypes::Color),
             "Table" => self.parse_table().map(ReturnTypes::Table),
@@ -346,7 +350,7 @@ impl Reader {
             )));
         };
 
-        let length = self.parse_fixnum()?;
+        let length = self.read_fixnum()?;
         let mut o = Object { name, list: vec![] };
         o.list.reserve(length as usize);
         self.object_cache.push(Arc::new(o.clone()));
@@ -378,7 +382,7 @@ impl Reader {
     }
 
     fn parse_symbol(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
-        let length = self.parse_fixnum()? as usize;
+        let length = self.read_fixnum()? as usize;
         let mut buf = vec![0u8; length];
         self.file.read_exact(&mut buf)?;
 
@@ -388,7 +392,7 @@ impl Reader {
     }
 
     fn parse_symlink(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
-        let index = self.parse_fixnum()? as usize;
+        let index = self.read_fixnum()? as usize;
         if let Some(symbol) = self.symbol_cache.get(index) {
             Ok(symbol.clone())
         } else {
