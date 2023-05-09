@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::any::TypeId;
+use std::intrinsics::mir::Return;
 use std::io::{Read, Seek, SeekFrom};
 use std::slice;
 use std::sync::Arc;
@@ -7,26 +8,9 @@ use std::sync::Arc;
 use crate::controllers::utils::color::Color;
 use crate::controllers::utils::object::Object;
 use crate::controllers::utils::reader_helper::Reader;
+use crate::controllers::utils::reader_helper::ReturnTypes;
 use crate::controllers::utils::table::Table;
 use crate::controllers::utils::tone::Tone;
-
-#[derive(Clone)]
-enum ReturnTypes {
-    Null(Arc<Option<()>>),
-    Bool(Arc<bool>),
-    Float(Arc<f64>),
-    Int(Arc<i32>),
-    String(Arc<String>),
-    Array(Arc<Vec<Arc<dyn Any>>>),
-    Hash(Arc<Vec<(Arc<dyn Any>, Arc<dyn Any>)>>),
-    Object(Arc<Object>),
-    Symbol(Arc<Vec<u8>>),
-    Link(Arc<usize>),
-    Symlink(Arc<usize>),
-    Color(Arc<Color>),
-    Tone(Arc<Tone>),
-    Table(Arc<Table>),
-}
 
 impl Reader {
     pub fn parse(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
@@ -36,7 +20,7 @@ impl Reader {
 
         match type_char {
             '@' => self.parse_link(),
-            'I' => Ok(ReturnTypes::Object(self.parse_ivar()?)),
+            'I' => self.parse_ivar(),
             '0' => Ok(ReturnTypes::Null(Arc::new(None))),
             'T' => Ok(ReturnTypes::Bool(Arc::new(true))),
             'F' => Ok(ReturnTypes::Bool(Arc::new(false))),
@@ -67,7 +51,7 @@ impl Reader {
         Ok(ReturnTypes::Link(Arc::new(index as usize)))
     }
 
-    fn parse_ivar(&mut self) -> Result<Arc<Object>, Box<dyn std::error::Error>> {
+    fn parse_ivar(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
         let name = self.parse()?;
         if name.type_id() != TypeId::of::<String>() {
             return Err(Box::new(std::io::Error::new(
@@ -77,7 +61,7 @@ impl Reader {
         }
 
         let length = self.read_fixnum()?;
-        self.object_cache.push(name.clone());
+        self.object_cache.push(name.clone().into());
 
         for _ in 0..length {
             let key = {
@@ -88,7 +72,7 @@ impl Reader {
                         "IVar key not symbol",
                     )));
                 }
-                Arc::try_unwrap(key_any).unwrap_or_else(|a| (*a).clone())
+                Arc::try_unwrap(key_any.into()).unwrap_or_else(|a| (*a).clone())
             };
 
             let _value = self.parse();
@@ -175,7 +159,8 @@ impl Reader {
         };
 
         let float_obj = Arc::new(v);
-        self.object_cache.push(float_obj.clone());
+        let return_type_float =  ReturnTypes::Float(float_obj.clone());
+        self.object_cache.push(Arc::new(return_type_float));
         Ok(float_obj)
     }
 
@@ -186,20 +171,21 @@ impl Reader {
 
         let str_val = String::from_utf8(buf)?;
         let string_obj = Arc::new(str_val);
-        self.object_cache.push(string_obj.clone());
+        let return_type_string = ReturnTypes::String(string_obj.clone());
+        self.object_cache.push(Arc::new(return_type_string));
         Ok(string_obj)
     }
 
     fn parse_array(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
         let len = self.read_fixnum()?;
-        let mut arr: Vec<Arc<dyn Any>> = Vec::with_capacity(len as usize);
-        self.object_cache.push(Arc::new(arr.clone()));
+        let mut arr: Vec<Arc<ReturnTypes>> = Vec::with_capacity(len as usize);
 
         for _ in 0..len {
             let elem = self.parse()?;
-            arr.push(elem);
+            arr.push(Arc::new(elem));
         }
-
+        
+        self.object_cache.push(Arc::new(ReturnTypes::Array(arr)));
         let array_obj = Arc::new(arr);
         self.object_cache.push(array_obj.clone());
         Ok(array_obj)
