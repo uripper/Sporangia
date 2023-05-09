@@ -1,25 +1,24 @@
 use byteorder::{ReadBytesExt, LE};
 use std::any::Any;
 use std::any::TypeId;
+use std::fs::File;
 use std::io::Read;
 use std::sync::Arc;
-use std::fs::File;
 
 use crate::controllers::utils::color::Color;
 use crate::controllers::utils::object::Object;
+use crate::controllers::utils::pure_object::PureObject;
 use crate::controllers::utils::reader_helper::ReturnTypes;
 use crate::controllers::utils::table::Table;
 use crate::controllers::utils::tone::Tone;
-use crate::controllers::utils::pure_object::PureObject;
 
-
-pub struct Reader<'a> {
+pub struct Reader {
     pub file: File,
-    pub object_cache: Vec<Arc<ReturnTypes<'a>>>,
+    pub object_cache: Vec<Arc<ReturnTypes>>,
     pub symbol_cache: Vec<Vec<u8>>,
 }
 
-impl Reader<'_> {
+impl Reader {
     pub fn new(file: File) -> Self {
         Reader {
             file,
@@ -27,21 +26,32 @@ impl Reader<'_> {
             symbol_cache: Vec::new(),
         }
     }
-    pub fn parse(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
+    pub fn parse(&mut self) -> Result<usize, Box<dyn std::error::Error>> {
         let mut byte = [0u8];
         self.file.read_exact(&mut byte)?;
         let type_char = byte[0] as char;
 
         match type_char {
-            '@' => self.parse_link(),
+            '@' => Ok(self.parse_link()?),
             'I' => self.parse_ivar(),
-            '0' => Ok(ReturnTypes::Null(Arc::new(None))),
-            'T' => Ok(ReturnTypes::Bool(Arc::new(true))),
-            'F' => Ok(ReturnTypes::Bool(Arc::new(false))),
+            '0' => {
+                self.object_cache
+                    .push(Arc::new(ReturnTypes::Null(Arc::new(None))));
+                Ok(())
+            }
+            'T' => {
+                self.object_cache
+                    .push(Arc::new(ReturnTypes::Bool(Arc::new(true))));
+                Ok(())
+            }
+            'F' => {
+                self.object_cache
+                    .push(Arc::new(ReturnTypes::Bool(Arc::new(false))));
+                Ok(())
+            }
             'i' => self.parse_fixnum(),
-            'f' => Ok(ReturnTypes::Float(self.parse_float()?)),
-            '"' => Ok(ReturnTypes::String(self.parse_string()?)),
-            '[' => self.parse_array(),
+            'f' => self.parse_float(),
+            '"' => self.parse_string(),
             '{' => self.parse_hash(),
             'u' => self.parse_userdef(),
             'o' => self.parse_object(),
@@ -54,7 +64,7 @@ impl Reader<'_> {
         }
     }
 
-    fn parse_link(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
+    fn parse_link(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let index = self.read_fixnum()?;
         if index as usize >= self.object_cache.len() {
             return Err(Box::new(std::io::Error::new(
@@ -62,20 +72,14 @@ impl Reader<'_> {
                 "Link index out of range",
             )));
         }
-        Ok(ReturnTypes::Link(Arc::new(index as usize)))
+        self.object_cache
+            .push(Arc::new(ReturnTypes::Link(Arc::new(index as usize))));
+        Ok(())
     }
-
-    fn parse_ivar(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
-        let name = self.parse()?;
-        if name.type_id() != TypeId::of::<String>() {
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Unsupported IVar Type",
-            )));
-        }
+    fn parse_ivar(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.parse()?; // Parse and discard the name, since we're not using it
 
         let length = self.read_fixnum()?;
-        self.object_cache.push(name.clone().into());
 
         for _ in 0..length {
             let key = {
@@ -89,17 +93,18 @@ impl Reader<'_> {
                 Arc::try_unwrap(key_any.into()).unwrap_or_else(|a| (*a).clone())
             };
 
-            let _value = self.parse();
+            self.parse()?; // Parse and discard the value, since we're not using it
         }
 
-        Ok(name)
+        Ok(())
     }
 
-    fn parse_fixnum(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
+    fn parse_fixnum(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let num = self.read_fixnum()?;
-        Ok(ReturnTypes::Int(Arc::new(num)))
+        self.object_cache
+            .push(Arc::new(ReturnTypes::Int(Arc::new(num))));
+        Ok(())
     }
-
     fn read_fixnum(&mut self) -> Result<i32, Box<dyn std::error::Error>> {
         let mut byte_buffer = [0u8];
         self.file.read_exact(&mut byte_buffer)?;
@@ -159,7 +164,7 @@ impl Reader<'_> {
         Ok(result as i32)
     }
 
-    fn parse_float(&mut self) -> Result<Arc<f64>, Box<dyn std::error::Error>> {
+    fn parse_float(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let length = self.read_fixnum()?;
         let mut buf = vec![0u8; length as usize];
         self.file.read_exact(&mut buf)?;
@@ -174,62 +179,39 @@ impl Reader<'_> {
             })?,
         };
 
-        let float_obj = Arc::new(v);
-        let return_type_float = ReturnTypes::Float(float_obj.clone());
-        self.object_cache.push(Arc::new(return_type_float));
-        Ok(float_obj)
+        let float_obj = Arc::new(ReturnTypes::Float(Arc::new(v)));
+        self.object_cache.push(float_obj);
+        Ok(())
     }
 
-    fn parse_string(&mut self) -> Result<Arc<String>, Box<dyn std::error::Error>> {
+    fn parse_string(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let length = self.read_fixnum()? as usize;
         let mut buf = vec![0u8; length];
         self.file.read_exact(&mut buf)?;
 
         let str_val = String::from_utf8(buf)?;
-        let string_obj = Arc::new(str_val);
-        let return_type_string = ReturnTypes::String(string_obj.clone());
-        self.object_cache.push(Arc::new(return_type_string));
-        Ok(string_obj)
+        let string_obj = Arc::new(ReturnTypes::String(Arc::new(str_val)));
+        self.object_cache.push(string_obj);
+        Ok(())
     }
 
-    fn parse_array(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
-        let len = self.read_fixnum()?;
-        let mut arr: Vec<Arc<ReturnTypes>> = Vec::with_capacity(len as usize);
-
-        for _ in 0..len {
-            let elem = self.parse()?;
-            arr.push(Arc::new(elem));
-        }
-
-        self.object_cache
-            .push(Arc::new(ReturnTypes::Array(Arc::new(arr.clone()))));
-        let array_obj = Arc::new(arr);
-        let arc_vec_array_obj = Arc::new(ReturnTypes::Array(array_obj.clone()));
-        self.object_cache.push(arc_vec_array_obj.clone());
-        Ok(ReturnTypes::Array(array_obj))
-    }
 
     fn try_fixnum(&mut self) -> Result<i32, Box<dyn std::error::Error>> {
-        {
-            if self.read_fixnum()? != 0 {
-                println!("Not Fixnum");
-                return Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Not Fixnum",
-                )));
-            } else {
-                self.read_fixnum()
-            }
+        if self.read_fixnum()? != 0 {
+            println!("Not Fixnum");
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Not Fixnum",
+            )));
+        } else {
+            self.read_fixnum()
         }
     }
 
-    fn parse_hash(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
+    fn parse_hash(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let length = self.read_fixnum()?;
         let mut map: std::collections::HashMap<i32, Arc<ReturnTypes>> =
             std::collections::HashMap::new();
-        let return_map = ReturnTypes::Hash(Arc::new(map.clone()));
-        self.object_cache
-            .push(Arc::new(ReturnTypes::Hash(Arc::new(map).clone())));
 
         for _ in 0..length {
             let key_any = self.try_fixnum()?;
@@ -238,13 +220,12 @@ impl Reader<'_> {
             map.insert(key, Arc::new(value));
         }
 
-        let hash_obj = Arc::new(map);
-        let return_type_hash = Arc::new(ReturnTypes::Hash(hash_obj.clone()));
-        self.object_cache.push(return_type_hash.clone());
-        Ok(ReturnTypes::Hash(hash_obj))
+        let hash_obj = Arc::new(ReturnTypes::Hash(Arc::new(map)));
+        self.object_cache.push(hash_obj);
+        Ok(())
     }
 
-    fn parse_userdef(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
+    fn parse_userdef(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let pname = self.parse()?;
         let name = match pname {
             ReturnTypes::Symbol(s) => String::from_utf8(s.to_vec())?,
@@ -269,20 +250,19 @@ impl Reader<'_> {
         }
     }
 
-    fn parse_color(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
+    fn parse_color(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let mut color = Color::default();
         color.red = self.file.read_f64::<LE>()?;
         color.green = self.file.read_f64::<LE>()?;
         color.blue = self.file.read_f64::<LE>()?;
         color.alpha = self.file.read_f64::<LE>()?;
 
-        let color_obj = Arc::new(color);
-        self.object_cache
-            .push(ReturnTypes::Color(color_obj.clone()).into());
-        Ok(ReturnTypes::Color(color_obj))
+        let color_obj = Arc::new(ReturnTypes::Color(Arc::new(color)));
+        self.object_cache.push(color_obj);
+        Ok(())
     }
 
-    fn parse_table(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
+    fn parse_table(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let mut table = Table::default();
         table.x_size = self.file.read_i32::<LE>()?;
         table.y_size = self.file.read_i32::<LE>()?;
@@ -294,9 +274,9 @@ impl Reader<'_> {
             table.data[i as usize] = self.file.read_i16::<LE>()?;
         }
 
-        let table_obj = ReturnTypes::Table(Arc::new(&table));
-        self.object_cache.push(Arc::new(table_obj.clone()));
-        Ok(ReturnTypes::Table(Arc::new(&table)))
+        let table_obj = Arc::new(ReturnTypes::Table(Arc::new(table)));
+        self.object_cache.push(table_obj);
+        Ok(())
     }
 
     fn parse_tone(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
@@ -311,6 +291,21 @@ impl Reader<'_> {
             .push(Arc::new(ReturnTypes::Tone(tone_obj.clone())));
         Ok(ReturnTypes::Tone(tone_obj))
     }
+
+fn parse_array(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    let len = self.read_fixnum()?;
+    let mut arr: Vec<Arc<ReturnTypes>> = Vec::with_capacity(len as usize);
+
+    for _ in 0..len {
+        let elem_index = self.parse()?;
+        let elem = self.object_cache[elem_index].clone();
+        arr.push(elem);
+    }
+
+    let array_obj = Arc::new(ReturnTypes::Array(Arc::new(arr)));
+    self.object_cache.push(array_obj);
+    Ok(())
+}
     fn parse_object(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
         let name = self.parse()?;
         let name = if let ReturnTypes::Symbol(name) = name {
