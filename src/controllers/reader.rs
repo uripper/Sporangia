@@ -1,6 +1,5 @@
 use std::any::Any;
 use std::any::TypeId;
-use std::intrinsics::mir::Return;
 use std::io::{Read, Seek, SeekFrom};
 use std::slice;
 use std::sync::Arc;
@@ -184,31 +183,46 @@ impl Reader {
             let elem = self.parse()?;
             arr.push(Arc::new(elem));
         }
-        
-        self.object_cache.push(Arc::new(ReturnTypes::Array(arr)));
+
+        self.object_cache.push(Arc::new(ReturnTypes::Array(Arc::new(arr.clone()))));
         let array_obj = Arc::new(arr);
-        self.object_cache.push(array_obj.clone());
-        Ok(array_obj)
+        let arc_vec_array_obj = Arc::new(ReturnTypes::Array(array_obj.clone()));
+        self.object_cache.push(arc_vec_array_obj.clone());
+        Ok(ReturnTypes::Array(array_obj))
     }
 
-    fn parse_hash(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+    fn try_fixnum(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
+        {
+            if self.read_fixnum()? != 0 {
+                println!("Not Fixnum");
+                return Ok(ReturnTypes::Null(None.into()));
+            }
+            else {
+                Ok(ReturnTypes::Int(Arc::new(0)))
+            }
+        }
+    }
+
+
+    fn parse_hash(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
         let length = self.read_fixnum()?;
-        let mut map: std::collections::HashMap<i32, Arc<dyn Any>> =
+        let mut map: std::collections::HashMap<i32, Arc<(dyn Any + 'static)>> =
             std::collections::HashMap::new();
-        self.object_cache.push(Arc::new(map.clone()));
+        self.object_cache.push(Arc::new(ReturnTypes::Hash(Arc::new(map).clone())));
 
         for _ in 0..length {
-            let key_any = self.parse()?;
-            if key_any.type_id() != TypeId::of::<i32>() {
+            let key_any = self.try_fixnum()?;
+            if key_any == ReturnTypes::Null(None.into()) {
                 return Err(Box::new(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "Hash key not Fixnum",
                 )));
             }
-            let key = Arc::try_unwrap(key_any).unwrap_or_else(|a| (*a).clone()) as i32;
-
-            let value = self.parse()?;
-            map.insert(key, value);
+            else {
+                let key = key_any;
+                let value = self.parse()?;
+                map.insert(key, value);
+            }
         }
 
         let hash_obj = Arc::new(map);
