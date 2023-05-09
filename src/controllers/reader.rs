@@ -1,6 +1,8 @@
 use std::any::Any;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
+use std::any::TypeId;
+use std::slice;
 
 use crate::controllers::utils::color::Color;
 use crate::controllers::utils::object::Object;
@@ -8,27 +10,44 @@ use crate::controllers::utils::reader_helper::Reader;
 use crate::controllers::utils::table::Table;
 use crate::controllers::utils::tone::Tone;
 
+enum ReturnTypes {
+    Null(Arc<Option<()>>),
+    Bool(Arc<bool>),
+    Float(Arc<f32>),
+    Int(Arc<i32>),
+    String(Arc<String>),
+    Array(Arc<Vec<Arc<dyn Any>>>),
+    Hash(Arc<Vec<(Arc<dyn Any>, Arc<dyn Any>)>>),
+    Object(Arc<Object>),
+    Symbol(Arc<Vec<u8>>),
+    Link(Arc<usize>),
+    Symlink(Arc<usize>),
+    Color(Arc<Color>),
+    Tone(Arc<Tone>),
+    Table(Arc<Table>),
+}
+
 impl Reader {
-    pub fn parse(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+    pub fn parse(&mut self) -> Result<ReturnTypes, Box<dyn std::error::Error>> {
         let mut byte = [0u8];
         self.file.read_exact(&mut byte)?;
         let type_char = byte[0] as char;
 
         match type_char {
-            '@' => self.parse_link(),
-            'I' => self.parse_ivar(),
-            '0' => Ok(Arc::new(())),
-            'T' => Ok(Arc::new(true)),
-            'F' => Ok(Arc::new(false)),
-            'i' => self.parse_fixnum().map(|num| Arc::new(num)),
-            'f' => self.parse_float(),
-            '"' => self.parse_string(),
-            '[' => self.parse_array(),
-            '{' => self.parse_hash(),
+            '@' => self.parse_link().map(ReturnTypes::Link),
+            'I' => self.parse_ivar().map(ReturnTypes::Object),
+            '0' => Ok(ReturnTypes::Null(None)),
+            'T' => Ok(ReturnTypes::Bool(true)),
+            'F' => Ok(ReturnTypes::Bool(false)),
+            'i' => self.parse_fixnum().map(ReturnTypes::Int),
+            'f' => self.parse_float().map(ReturnTypes::Float),
+            '"' => self.parse_string().map(ReturnTypes::String),
+            '[' => self.parse_array().map(ReturnTypes::Array),
+            '{' => self.parse_hash().map(ReturnTypes::Hash),
             'u' => self.parse_userdef(),
-            'o' => self.parse_object(),
-            ':' => self.parse_symbol(),
-            ';' => self.parse_symlink(),
+            'o' => self.parse_object().map(ReturnTypes::Object),
+            ':' => self.parse_symbol().map(ReturnTypes::Symbol),
+            ';' => self.parse_symlink().map(ReturnTypes::Symlink),
             _ => Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Unknown Value: {}", type_char),
@@ -219,7 +238,16 @@ impl Reader {
         };
 
         let size = self.parse_fixnum()?;
-
+    match determined_type {
+        "Color" => self.parse_color().map(ReturnTypes::Color),
+        "Table" => self.parse_table().map(ReturnTypes::Table),
+        "Tone" => self.parse_tone().map(ReturnTypes::Tone),
+        "Object" => self.parse_object().map(ReturnTypes::Object),
+        _ => Err(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Unknown user-defined type: {}", determined_type),
+        ))),
+    }
         if name == "Color" {
             let mut color = Color::default();
             self.file.read_exact(slice::from_raw_parts_mut(
@@ -279,26 +307,26 @@ impl Reader {
             Ok(table_obj)
         } else if name == "Tone" {
             let mut tone = Tone::default();
-self.file.read_exact(slice::from_raw_parts_mut(
-    (&mut tone.red) as *mut f64 as *mut u8,
-    8,
-))?;
-self.file.read_exact(slice::from_raw_parts_mut(
-    (&mut tone.green) as *mut f64 as *mut u8,
-    8,
-))?;
-self.file.read_exact(slice::from_raw_parts_mut(
-    (&mut tone.blue) as *mut f64 as *mut u8,
-    8,
-))?;
-self.file.read_exact(slice::from_raw_parts_mut(
-    (&mut tone.gray) as *mut f64 as *mut u8,
-    8,
-))?;
+            self.file.read_exact(slice::from_raw_parts_mut(
+                (&mut tone.red) as *mut f64 as *mut u8,
+                8,
+            ))?;
+            self.file.read_exact(slice::from_raw_parts_mut(
+                (&mut tone.green) as *mut f64 as *mut u8,
+                8,
+            ))?;
+            self.file.read_exact(slice::from_raw_parts_mut(
+                (&mut tone.blue) as *mut f64 as *mut u8,
+                8,
+            ))?;
+            self.file.read_exact(slice::from_raw_parts_mut(
+                (&mut tone.gray) as *mut f64 as *mut u8,
+                8,
+            ))?;
 
-let tone_obj = Arc::new(tone);
-self.object_cache.push(tone_obj.clone());
-Ok(tone_obj)
+            let tone_obj = Arc::new(tone);
+            self.object_cache.push(tone_obj.clone());
+            Ok(tone_obj)
         } else {
             Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
