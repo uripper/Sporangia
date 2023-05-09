@@ -1,6 +1,8 @@
 use std::fs::File;
 use std::path::Path;
 
+
+
 mod ui;
 mod controllers;
 #[derive(Debug, Copy, Clone)]
@@ -31,4 +33,8 @@ fn state_handler(state: State) -> State {
         }
     }
     new_state
+}
+
+fn open_file(file_path: &str){
+    Reader(file_path);
 }
