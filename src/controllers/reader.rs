@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{self, Read};
 
-fn Reader(file_path: String) -> io::Result<()> {
+pub fn reader(file_path: &str) -> io::Result<()> {
     // Open the RXDATA file
     let mut file = File::open(file_path)?;
 

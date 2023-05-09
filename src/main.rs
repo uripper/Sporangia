@@ -1,6 +1,4 @@
-use std::fs::File;
-use std::path::Path;
-
+use std::process::Command;
 
 
 mod ui;
@@ -12,6 +10,7 @@ MenuState,
 Exit,
 }
 fn main() {
+    convert_marshal_to_json("src/test_files/test.rxdata", "src/test_files/test.json");
     let mut state = State::SplashState;
     loop {
         state = state_handler(state);
@@ -35,6 +34,19 @@ fn state_handler(state: State) -> State {
     new_state
 }
 
-fn open_file(file_path: &str){
-    Reader(file_path);
+fn convert_marshal_to_json(input_filename: &str, output_filename: &str) {
+
+    let output = Command::new("ruby")
+        .arg("rxToJSON.rb")
+        .arg(input_filename)
+        .arg(output_filename)
+        .output()
+        .expect("Failed to execute command");
+
+    if output.status.success() {
+        println!("Successfully converted file.");
+    } else {
+        let s = String::from_utf8_lossy(&output.stderr);
+        println!("Error: {}", s);
+    }
 }
