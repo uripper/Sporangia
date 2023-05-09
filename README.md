@@ -53,4 +53,4 @@ Sporangia is licensed under the [MIT License](https://opensource.org/licenses/MI
 
 ## Acknowledgements
 Font used in Sporangia logo is Continuum by Brøderbund Software. Found here: https://www.dafont.com/continuum.font
-
+Parser was made possible through heavy inspiration by the rxdataToJSON by GamingLiamStudios:  https://github.com/GamingLiamStudios/rxdataToJSON
