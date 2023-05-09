@@ -148,9 +148,11 @@ impl Reader {
         let mut buf = [0; 4];
         self.file.read_exact(&mut buf)?;
         let length = u32::from_be_bytes(buf);
-        let mut buf = vec![0; length as usize];
-        self.file.read_exact(&mut buf)?;
-        Ok(Box::new(buf))
+        let mut data = vec![0; length as usize];
+        self.file.read_exact(&mut data)?;
+        println!("Data length: {}", length);
+        println!("Data: {:?}", data);
+        Ok(Box::new(data))
     }
 
     fn handle_extended(&mut self) -> io::Result<Box<dyn Any>> {
@@ -306,25 +308,36 @@ impl Reader {
     }
 
     fn handle_link(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut buf = [0; 4];
-        self.file.read_exact(&mut buf)?;
-        let index = u32::from_be_bytes(buf);
-        if index >= self.object_cache.len() as u32 {
+        let index = self.handle_fixnum()? as usize;
+        if index >= self.object_cache.len() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Invalid object index",
             ));
         }
-        Ok(self.object_cache[index as usize].clone())
+        Ok(self.object_cache[index].clone())
     }
 
     fn handle_module(&mut self) -> io::Result<Box<dyn Any>> {
+        println!("Encountered a module. This data type is not yet supported.");
+
+        // Read the next 4 bytes and print them as raw bytes
         let mut buf = [0; 4];
         self.file.read_exact(&mut buf)?;
-        let length = u32::from_be_bytes(buf);
-        let mut buf = vec![0; length as usize];
-        self.file.read_exact(&mut buf)?;
-        Ok(Box::new(buf))
+        println!("Next 4 bytes: {:?}", buf);
+
+        // Try to interpret the bytes as a 32-bit integer
+        let num = i32::from_be_bytes(buf);
+        println!("Interpreted as i32: {}", num);
+
+        // Try to interpret the bytes as a string
+        let s = String::from_utf8_lossy(&buf);
+        println!("Interpreted as string: {}", s);
+
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Module data type is not yet supported",
+        ))
     }
 
     fn handle_nil(&mut self) -> io::Result<Box<dyn Any>> {
@@ -395,12 +408,13 @@ impl Reader {
     }
 
     fn handle_string(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut buf = [0; 4];
+        let len = self.read_fixnum()?;
+        let mut buf = vec![0; len as usize];
         self.file.read_exact(&mut buf)?;
-        let length = u32::from_be_bytes(buf);
-        let mut buf = vec![0; length as usize];
-        self.file.read_exact(&mut buf)?;
-        Ok(Box::new(buf))
+        let str = String::from_utf8(buf)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid UTF-8"))?;
+        self.object_cache.push(Box::new(str.clone()));
+        Ok(Box::new(str))
     }
 
     fn handle_struct(&mut self) -> io::Result<Box<dyn Any>> {
@@ -417,35 +431,25 @@ impl Reader {
     }
 
     fn handle_symbol(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut buf = [0; 4];
-        self.file.read_exact(&mut buf)?;
-        let length = u32::from_be_bytes(buf);
-        let mut buf = vec![0; length as usize];
-        self.file.read_exact(&mut buf)?;
-        Ok(Box::new(buf))
+        let len = self.read_fixnum()?;
+        let mut arr = vec![0; len as usize];
+        self.file.read_exact(&mut arr)?;
+        self.symbol_cache.push(arr.clone());
+        Ok(Box::new(arr))
     }
 
     fn handle_symlink(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut buf = [0; 4];
-        self.file.read_exact(&mut buf)?;
-        let length = u32::from_be_bytes(buf);
-        let mut buf = vec![0; length as usize];
-        self.file.read_exact(&mut buf)?;
-        Ok(Box::new(buf))
+        let index = self.read_fixnum()?;
+        if index >= self.symbol_cache.len() as i32 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid symbol index",
+            ));
+        }
+        Ok(Box::new(self.symbol_cache[index as usize].clone()))
     }
 
     fn handle_tone(&mut self) -> io::Result<Box<dyn Any>> {
-        fn handle_table(&mut self) -> io::Result<Box<dyn Any>> {
-            let mut table = Table {
-                x: 0,
-                y: 0,
-                width: 0,
-                height: 0,
-            };
-            self.file.read_exact(bytemuck::cast_slice_mut(&mut table))?;
-            Ok(Box::new(table))
-        }
-
         let mut tone = Tone {
             red: 0.0,
             green: 0.0,
@@ -454,6 +458,17 @@ impl Reader {
         };
         self.file.read_exact(bytemuck::cast_slice_mut(&mut tone))?;
         Ok(Box::new(tone))
+    }
+
+    fn handle_table(&mut self) -> io::Result<Box<dyn Any>> {
+        let mut table = Table {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
+        self.file.read_exact(bytemuck::cast_slice_mut(&mut table))?;
+        Ok(Box::new(table))
     }
 
     fn handle_true(&mut self) -> io::Result<Box<dyn Any>> {
@@ -484,11 +499,10 @@ impl Reader {
     }
 
     fn handle_user_marshall(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut buf = [0; 4];
+        let mut buf = [0; 1];
         self.file.read_exact(&mut buf)?;
-        let length = u32::from_be_bytes(buf);
-        let mut buf = vec![0; length as usize];
-        self.file.read_exact(&mut buf)?;
-        Ok(Box::new(buf))
+        let data = buf[0];
+        println!("User marshalled data: {}", data);
+        Ok(Box::new(data))
     }
 }
