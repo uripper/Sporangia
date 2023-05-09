@@ -1,532 +1,373 @@
 use std::any::Any;
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::{self, BufReader, Read};
+use std::io::{Read, Seek, SeekFrom};
+use std::sync::Arc;
 
-struct Object {
-    name: String,
-    list: HashMap<String, Box<dyn Any>>,
-}
-
-impl Clone for Object {
-    fn clone(&self) -> Self {
-        let mut new_list = HashMap::new();
-        for (key, value) in &self.list {
-            let value = value.downcast_ref::<String>().unwrap().clone();
-            new_list.insert(key.clone(), Box::new(value) as Box<dyn Any>);
-        }
-        Object {
-            name: self.name.clone(),
-            list: new_list,
-        }
-    }
-}
-
-
-#[derive(Clone)]
-struct Color {
-    red: f64,
-    green: f64,
-    blue: f64,
-    alpha: f64,
-}
-
-#[derive(Clone)]
-struct Table {
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-}
-
-#[derive(Clone)]
-struct Tone {
-    red: f64,
-    green: f64,
-    blue: f64,
-}
-
-pub struct Reader {
-    file: BufReader<File>,
-    object_cache: Vec<Box<dyn Any>>,
-    symbol_cache: Vec<Vec<u8>>,
-}
+use crate::controllers::utils::color::Color;
+use crate::controllers::utils::object::Object;
+use crate::controllers::utils::reader_helper::Reader;
+use crate::controllers::utils::table::Table;
+use crate::controllers::utils::tone::Tone;
 
 impl Reader {
-    pub fn new(file: File) -> Reader {
-        Reader {
-            file: BufReader::new(file),
-            object_cache: Vec::new(),
-            symbol_cache: Vec::new(),
+    pub fn parse(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+        let mut byte = [0u8];
+        self.file.read_exact(&mut byte)?;
+        let type_char = byte[0] as char;
+
+        match type_char {
+            '@' => self.parse_link(),
+            'I' => self.parse_ivar(),
+            '0' => Ok(Arc::new(())),
+            'T' => Ok(Arc::new(true)),
+            'F' => Ok(Arc::new(false)),
+            'i' => self.parse_fixnum().map(|num| Arc::new(num)),
+            'f' => self.parse_float(),
+            '"' => self.parse_string(),
+            '[' => self.parse_array(),
+            '{' => self.parse_hash(),
+            'u' => self.parse_userdef(),
+            'o' => self.parse_object(),
+            ':' => self.parse_symbol(),
+            ';' => self.parse_symlink(),
+            _ => Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Unknown Value: {}", type_char),
+            ))),
         }
     }
 
-    pub fn parse(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut buf = [0; 1];
-        self.file.read_exact(&mut buf)?;
-        let type_id = buf[0];
-        match type_id {
-            b'[' => Ok(Box::new(self.handle_array()?)),
-            b'l' => self.handle_bignum(),
-            b'C' => self.handle_class(),
-            b'd' => self.handle_data(),
-            b'e' => self.handle_extended(),
-            b'F' => self.handle_false(),
-            b'i' => self.handle_fixnum(),
-            b'f' => self.handle_float(),
-            b'{' => self.handle_hash(),
-            b'}' => self.handle_hash_def(),
-            b'I' => self.handle_ivar(),
-            b'@' => self.handle_link(),
-            b'm' => self.handle_module(),
-            b'0' => self.handle_nil(),
-            b'/' => self.handle_regexp(),
-            b'"' => self.handle_string(),
-            b'S' => self.handle_struct(),
-            b':' => self.handle_symbol(),
-            b';' => self.handle_symlink(),
-            b'T' => self.handle_true(),
-            b'u' => self.handle_user_defined(),
-            b'U' => self.handle_user_marshall(),
-
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Unknown type identifier",
-            )),
+    fn parse_link(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+        let index = self.parse_fixnum()?;
+        if let Some(val) = self.object_cache.get(index as usize) {
+            Ok(val.clone())
+        } else {
+            Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Link index out of range",
+            )))
         }
     }
 
-    fn handle_array(&mut self) -> io::Result<Vec<Box<dyn Any>>> {
-        let length = self.handle_fixnum()? as usize;
-        let mut array: Vec<Box<dyn Any>> = Vec::with_capacity(length);
+    fn parse_ivar(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+        let name = self.parse()?;
+        if name.type_id() != TypeId::of::<String>() {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Unsupported IVar Type",
+            )));
+        }
+
+        let length = self.parse_fixnum()?;
+        self.object_cache.push(name.clone());
+
         for _ in 0..length {
-            let value = self.parse()?;
-            array.push(value);
+            let key = {
+                let key_any = self.parse()?;
+                if key_any.type_id() != TypeId::of::<Vec<u8>>() {
+                    return Err(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "IVar key not symbol",
+                    )));
+                }
+                Arc::try_unwrap(key_any).unwrap_or_else(|a| (*a).clone())
+            };
+
+            let _value = self.parse();
+            // TODO: Do something with the character encoding
         }
-        self.object_cache.push(array.clone());
-        Ok(array)
+
+        Ok(name)
     }
 
-    fn handle_bignum(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut buf = [0; 4];
-        self.file.read_exact(&mut buf)?;
-        let length = u32::from_be_bytes(buf);
-        let mut buf = vec![0; length as usize];
-        self.file.read_exact(&mut buf)?;
-        let mut result = 0;
-        for byte in buf {
-            result = result << 8 | byte as i64;
-        }
-        Ok(Box::new(result))
-    }
+    fn parse_fixnum(&mut self) -> Result<i32, Box<dyn std::error::Error>> {
+        let mut c = [0u8];
+        self.file.read_exact(&mut c)?;
+        let c = c[0] as i8;
 
-    fn handle_class(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut buf = [0; 4];
-        self.file.read_exact(&mut buf)?;
-        let index = u32::from_be_bytes(buf);
-        if index >= self.symbol_cache.len() as u32 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid symbol index",
-            ));
-        }
-        let symbol = self.symbol_cache[index as usize].clone();
-        let mut buf = [0; 4];
-        self.file.read_exact(&mut buf)?;
-        let superclass = self.parse()?;
-        let mut buf = [0; 4];
-        self.file.read_exact(&mut buf)?;
-        let instance_variables = self.parse()?;
-        let mut class = HashMap::new();
-        class.insert(b"symbol".to_vec(), Box::new(symbol));
-        class.insert(b"superclass".to_vec(), superclass);
-        class.insert(b"instance_variables".to_vec(), instance_variables);
-        Ok(Box::new(class))
-    }
-
-    fn handle_color(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut color = Color {
-            red: 0.0,
-            green: 0.0,
-            blue: 0.0,
-            alpha: 0.0,
-        };
-        self.file.read_exact(bytemuck::cast_slice_mut(&mut color))?;
-        Ok(Box::new(color))
-    }
-
-    fn handle_data(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut buf = [0; 4];
-        self.file.read_exact(&mut buf)?;
-        let length = u32::from_be_bytes(buf);
-        let mut data = vec![0; length as usize];
-        self.file.read_exact(&mut data)?;
-        println!("Data length: {}", length);
-        println!("Data: {:?}", data);
-        Ok(Box::new(data))
-    }
-
-    fn handle_extended(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut buf = [0; 1];
-        self.file.read_exact(&mut buf)?;
-        let type_id = buf[0];
-        match type_id {
-            b'c' => self.handle_cache(),
-            b's' => self.handle_symbol(),
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Unknown extended type identifier",
-            )),
-        }
-    }
-
-    fn handle_false(&mut self) -> io::Result<Box<dyn Any>> {
-        Ok(Box::new(false))
-    }
-
-    fn handle_fixnum(&mut self) -> io::Result< Box<dyn std::error::Error>> {
-        // Read the first byte from the file
-        let mut first_byte = [0u8; 1];
-        self.file.read_exact(&mut first_byte)?;
-        let first_byte = first_byte[0] as i32;
-
-        // If the first byte is 0, the Fixnum is 0
-        if first_byte == 0 {
+        let x;
+        if c == 0 {
             return Ok(0);
-        }
-
-        let mut result: i32;
-        if first_byte > 0 {
-            // If the first byte is between 4 and 128, it is the Fixnum minus 5
-            if 4 < first_byte && first_byte < 128 {
-                return Ok(first_byte - 5);
+        } else if c > 0 {
+            if 4 < c && c < 128 {
+                return Ok((c - 5) as i32);
             }
-            // If the first byte is greater than the size of an i32, it's too big
-            if first_byte as usize > std::mem::size_of::<i32>() {
-                return Err(Box::new(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Fixnum too big",
+            if c as usize > std::mem::size_of::<i32>() {
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Fixnum too big: {}", c),
                 )));
             }
-            // Initialize the result to 0
-            result = 0;
-            for i in 0..4 {
-                let mut byte = [0u8; 1];
-                self.file.read_exact(&mut byte)?;
-                let byte = byte[0] as i32;
-                // Shift and combine bytes to form the Fixnum
-                result = (if i < first_byte { byte << 24 } else { 0 }) | (result >> 8);
+
+            x = 0;
+            for _ in 0..4 {
+                let mut b = [0u8];
+                self.file.read_exact(&mut b)?;
+                x = (if c > 0 {
+                    b[0] as u32
+                } << 24)
+                    | (x >> 8);
+                c -= 1;
             }
         } else {
-            // If the first byte is between -4 and -129, it is the Fixnum plus 5
-            if -129 < first_byte && first_byte < -4 {
-                return Ok(first_byte + 5);
+            if -129 < c && c < -4 {
+                return Ok((c + 5) as i32);
             }
-            let first_byte = -first_byte;
-            // If the first byte is greater than the size of an i32, it's too big
-            if first_byte as usize > std::mem::size_of::<i32>() {
-                return Err("Fixnum too big".into());
+            c = -c;
+            if c as usize > std::mem::size_of::<i32>() {
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Fixnum too big: {}", c),
+                )));
             }
 
-            // Initialize the result to -1
-            result = -1;
-            let mask = !(0xff << 24);
-            for i in 0..4 {
-                let mut byte = [0u8; 1];
-                self.file.read_exact(&mut byte)?;
-                let byte = byte[0] as i32;
-                // Shift and combine bytes to form the Fixnum
-                result = (if i < first_byte { byte << 24 } else { 0xff }) | ((result >> 8) & mask);
+            x = !0;
+            const MASK: u32 = !(0xff << 24);
+            for _ in 0..4 {
+                let mut b = [0u8];
+                self.file.read_exact(&mut b)?;
+                x = (if c > 0 {
+                    b[0] as u32
+                } << 24)
+                    | ((x >> 8) & MASK);
+                c -= 1;
             }
         }
 
-        Ok(Box::new(result))
+        Ok(x as i32)
     }
 
-    fn handle_float(&mut self) -> io::Result<Box<dyn Any>> {
-        let length = self.handle_fixnum()? as usize;
-        let mut buf = vec![0; length];
+    fn parse_float(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+        let length = self.parse_fixnum()?;
+        let mut buf = vec![0u8; length as usize];
         self.file.read_exact(&mut buf)?;
-        let s = String::from_utf8_lossy(&buf);
-        let float = match s.as_ref() {
+
+        let str_val = String::from_utf8_lossy(&buf);
+        let v = match str_val.as_ref() {
             "nan" => std::f64::NAN,
             "inf" => std::f64::INFINITY,
             "-inf" => std::f64::NEG_INFINITY,
-            _ => s
-                .parse::<f64>()
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid float"))?,
+            _ => str_val.parse::<f64>().map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "Failed to parse float")
+            })?,
         };
-        Ok(Box::new(float))
+
+        let float_obj = Arc::new(v);
+        self.object_cache.push(float_obj.clone());
+        Ok(float_obj)
     }
 
-    fn handle_hash(&mut self) -> io::Result<Box<dyn Any>> {
-        let length = self.handle_fixnum()? as usize;
+    fn parse_string(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+        let length = self.parse_fixnum()? as usize;
+        let mut buf = vec![0u8; length];
+        self.file.read_exact(&mut buf)?;
 
-        let mut map: HashMap<i32, Box<dyn Any>> = HashMap::with_capacity(length);
+        let str_val = String::from_utf8(buf)?;
+        let string_obj = Arc::new(str_val);
+        self.object_cache.push(string_obj.clone());
+        Ok(string_obj)
+    }
+
+    fn parse_array(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+        let len = self.parse_fixnum()?;
+        let mut arr: Vec<Arc<dyn Any>> = Vec::with_capacity(len as usize);
+        self.object_cache.push(Arc::new(arr.clone()));
+
+        for _ in 0..len {
+            let elem = self.parse()?;
+            arr.push(elem);
+        }
+
+        let array_obj = Arc::new(arr);
+        self.object_cache.push(array_obj.clone());
+        Ok(array_obj)
+    }
+
+    fn parse_hash(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+        let length = self.parse_fixnum()?;
+        let mut map: std::collections::HashMap<i32, Arc<dyn Any>> =
+            std::collections::HashMap::new();
+        self.object_cache.push(Arc::new(map.clone()));
 
         for _ in 0..length {
-            let key = self.parse()?;
-            let key = match key.downcast_ref::<i32>() {
-                Some(&i) => i,
-                None => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "Hash key not Fixnum",
-                    ))
-                }
-            };
+            let key_any = self.parse()?;
+            if key_any.type_id() != TypeId::of::<i32>() {
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Hash key not Fixnum",
+                )));
+            }
+            let key = Arc::try_unwrap(key_any).unwrap_or_else(|a| (*a).clone()) as i32;
 
             let value = self.parse()?;
-
             map.insert(key, value);
         }
 
-        Ok(Box::new(map))
+        let hash_obj = Arc::new(map);
+        self.object_cache.push(hash_obj.clone());
+        Ok(hash_obj)
     }
 
-    fn handle_hash_def(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut hash = HashMap::new();
-        let default = self.parse()?;
-        hash.insert(b"default".to_vec(), default);
-        Ok(Box::new(hash))
-    }
+    fn parse_userdef(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+        let pname = self.parse()?;
+        let name = if pname.type_id() == TypeId::of::<Vec<u8>>() {
+            String::from_utf8(Arc::try_unwrap(pname).unwrap_or_else(|a| (*a).clone()))?
+        } else {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "UserDef name not Symbol",
+            )));
+        };
 
-    fn handle_ivar(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut buf = [0; 4];
-        self.file.read_exact(&mut buf)?;
-        let index = u32::from_be_bytes(buf);
-        if index >= self.object_cache.len() as u32 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid object index",
-            ));
-        }
-        let object = self.object_cache[index as usize].clone();
-        let object = object.downcast::<HashMap<Vec<u8>, Box<dyn Any>>>().unwrap();
-        let object = match self.object_cache[index as usize]
-            .clone()
-            .downcast::<HashMap<Vec<u8>, Box<dyn Any>>>()
-        {
-            Ok(obj) => obj,
-            Err(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Invalid object index",
-                ))
+        let size = self.parse_fixnum()?;
+
+        if name == "Color" {
+            let mut color = Color::default();
+            self.file.read_exact(slice::from_raw_parts_mut(
+                (&mut color.red) as *mut f64 as *mut u8,
+                8,
+            ))?;
+            self.file.read_exact(slice::from_raw_parts_mut(
+                (&mut color.green) as *mut f64 as *mut u8,
+                8,
+            ))?;
+            self.file.read_exact(slice::from_raw_parts_mut(
+                (&mut color.blue) as *mut f64 as *mut u8,
+                8,
+            ))?;
+            self.file.read_exact(slice::from_raw_parts_mut(
+                (&mut color.alpha) as *mut f64 as *mut u8,
+                8,
+            ))?;
+
+            let color_obj = Arc::new(color);
+            self.object_cache.push(color_obj.clone());
+            Ok(color_obj)
+        } else if name == "Table" {
+            let mut table = Table::default();
+            self.file.seek(SeekFrom::Current(4))?;
+            self.file.read_exact(slice::from_raw_parts_mut(
+                (&mut table.x_size) as *mut i32 as *mut u8,
+                4,
+            ))?;
+            self.file.read_exact(slice::from_raw_parts_mut(
+                (&mut table.y_size) as *mut i32 as *mut u8,
+                4,
+            ))?;
+            self.file.read_exact(slice::from_raw_parts_mut(
+                (&mut table.z_size) as *mut i32 as *mut u8,
+                4,
+            ))?;
+
+            let mut table_size = 0i32;
+            self.file.read_exact(slice::from_raw_parts_mut(
+                (&mut table_size) as *mut i32 as *mut u8,
+                4,
+            ))?;
+
+            table.data.resize(table_size as usize);
+            for i in 0..table_size {
+                let mut data = 0i16;
+                self.file.read_exact(slice::from_raw_parts_mut(
+                    (&mut data) as *mut i16 as *mut u8,
+                    2,
+                ))?;
+                table.data[i as usize] = data;
             }
-        };
-        let mut buf = [0; 4];
-        self.file.read_exact(&mut buf)?;
-        let index = u32::from_be_bytes(buf);
-        if index >= self.symbol_cache.len() as u32 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid symbol index",
-            ));
+
+            let table_obj = Arc::new(table);
+            self.object_cache.push(table_obj.clone());
+            Ok(table_obj)
+        } else if name == "Tone" {
+            let mut tone = Tone::default();
+self.file.read_exact(slice::from_raw_parts_mut(
+    (&mut tone.red) as *mut f64 as *mut u8,
+    8,
+))?;
+self.file.read_exact(slice::from_raw_parts_mut(
+    (&mut tone.green) as *mut f64 as *mut u8,
+    8,
+))?;
+self.file.read_exact(slice::from_raw_parts_mut(
+    (&mut tone.blue) as *mut f64 as *mut u8,
+    8,
+))?;
+self.file.read_exact(slice::from_raw_parts_mut(
+    (&mut tone.gray) as *mut f64 as *mut u8,
+    8,
+))?;
+
+let tone_obj = Arc::new(tone);
+self.object_cache.push(tone_obj.clone());
+Ok(tone_obj)
+        } else {
+            Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Unsupported user defined class: {}", name),
+            )))
         }
-        let symbol = self.symbol_cache[index as usize].clone();
-        let mut buf = [0; 4];
-        self.file.read_exact(&mut buf)?;
-        let value = self.parse()?;
-        object.insert(symbol, value);
-        Ok(Box::new(object))
     }
 
-    fn handle_link(&mut self) -> io::Result<Box<dyn Any>> {
-        let index = self.handle_fixnum()? as usize;
-        if index >= self.object_cache.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid object index",
-            ));
-        }
-        Ok(self.object_cache[index].clone())
-    }
-
-    fn handle_module(&mut self) -> io::Result<Box<dyn Any>> {
-        println!("Encountered a module. This data type is not yet supported.");
-
-        // Read the next 4 bytes and print them as raw bytes
-        let mut buf = [0; 4];
-        self.file.read_exact(&mut buf)?;
-        println!("Next 4 bytes: {:?}", buf);
-
-        // Try to interpret the bytes as a 32-bit integer
-        let num = i32::from_be_bytes(buf);
-        println!("Interpreted as i32: {}", num);
-
-        // Try to interpret the bytes as a string
-        let s = String::from_utf8_lossy(&buf);
-        println!("Interpreted as string: {}", s);
-
-        Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Module data type is not yet supported",
-        ))
-    }
-
-    fn handle_nil(&mut self) -> io::Result<Box<dyn Any>> {
-        Ok(Box::new(()))
-    }
-
-    fn handle_object(&mut self) -> io::Result<Box<dyn Any>> {
-        let name_as_bytes = self.parse()?;
-        let name = match name_as_bytes.downcast_ref::<Vec<u8>>() {
-            Some(vec) => String::from_utf8_lossy(vec).into_owned(),
-            None => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "Object name not Symbol",
-                ))
-            }
+    fn parse_object(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+        let name = self.parse()?;
+        let name = if name.type_id() == TypeId::of::<Vec<u8>>() {
+            String::from_utf8(Arc::try_unwrap(name).unwrap_or_else(|a| (*a).clone()))?
+        } else {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Object name not Symbol",
+            )));
         };
 
-        let length = self.handle_fixnum()? as usize;
-
-        let mut object = Object {
-            name,
-            list: HashMap::with_capacity(length),
-        };
+        let length = self.parse_fixnum()?;
+        let mut o = Object { name, list: vec![] };
+        o.list.reserve(length as usize);
+        self.object_cache.push(Arc::new(o.clone()));
 
         for _ in 0..length {
-            let key_as_bytes = self.parse()?;
-            let key = match key_as_bytes.downcast_ref::<Vec<u8>>() {
-                Some(vec) => String::from_utf8_lossy(vec).into_owned(),
-                None => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
+            let key = {
+                let key_any = self.parse()?;
+                if key_any.type_id() != TypeId::of::<Vec<u8>>() {
+                    return Err(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
                         "Object key not symbol",
-                    ))
+                    )));
                 }
+                String::from_utf8(Arc::try_unwrap(key_any).unwrap_or_else(|a| (*a).clone()))?
             };
 
-            if !key.starts_with('@') {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
+            if key.chars().nth(0) != Some('@') {
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
                     "Object Key not instance variable name",
-                ));
+                )));
             }
 
             let value = self.parse()?;
-
-            self.object_cache.push(Box::new(object.clone()));
-
-            object.list.insert(key, value);
+            o.list.push((key, value));
         }
 
-        Ok(Box::new(object))
+        Ok(Arc::new(o))
     }
 
-    fn handle_regexp(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut buf = [0; 4];
+    fn parse_symbol(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+        let length = self.parse_fixnum()? as usize;
+        let mut buf = vec![0u8; length];
         self.file.read_exact(&mut buf)?;
-        let length = u32::from_be_bytes(buf);
-        let mut buf = vec![0; length as usize];
-        self.file.read_exact(&mut buf)?;
-        let mut buf = [0; 4];
-        self.file.read_exact(&mut buf)?;
-        let options = u32::from_be_bytes(buf);
-        let mut regexp = HashMap::new();
-        regexp.insert(b"source".to_vec(), Box::new(buf));
-        regexp.insert(b"options".to_vec(), Box::new(options));
-        Ok(Box::new(regexp))
+
+        let symbol = Arc::new(buf);
+        self.symbol_cache.push(symbol.clone());
+        Ok(symbol)
     }
 
-    fn handle_string(&mut self) -> io::Result<Box<dyn Any>> {
-        let len = self.handle_fixnum()?;
-        let mut buf = vec![0; len as usize];
-        self.file.read_exact(&mut buf)?;
-        let str = String::from_utf8(buf)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid UTF-8"))?;
-        self.object_cache.push(Box::new(str.clone()));
-        Ok(Box::new(str))
-    }
-
-    fn handle_struct(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut buf = [0; 4];
-        self.file.read_exact(&mut buf)?;
-        let length = u32::from_be_bytes(buf);
-        let mut struct_ = HashMap::new();
-        for _ in 0..length {
-            let key = self.parse()?;
-            let value = self.parse()?;
-            struct_.insert(key, value);
+    fn parse_symlink(&mut self) -> Result<Arc<dyn Any>, Box<dyn std::error::Error>> {
+        let index = self.parse_fixnum()? as usize;
+        if let Some(symbol) = self.symbol_cache.get(index) {
+            Ok(symbol.clone())
+        } else {
+            Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Symlink index out of range",
+            )))
         }
-        Ok(Box::new(struct_))
-    }
-
-    fn handle_symbol(&mut self) -> io::Result<Box<dyn Any>> {
-        let len = self.handle_fixnum()?;
-        let mut arr = vec![0; len as usize];
-        self.file.read_exact(&mut arr)?;
-        self.symbol_cache.push(arr.clone());
-        Ok(Box::new(arr))
-    }
-
-    fn handle_symlink(&mut self) -> io::Result<Box<dyn Any>> {
-        let index = self.handle_fixnum()?;
-        if index >= self.symbol_cache.len() as i32 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Invalid symbol index",
-            ));
-        }
-        Ok(Box::new(self.symbol_cache[index as usize].clone()))
-    }
-
-    fn handle_tone(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut tone = Tone {
-            red: 0.0,
-            green: 0.0,
-            blue: 0.0,
-        };
-        self.file.read_exact(bytemuck::cast_slice_mut(&mut tone))?;
-        Ok(Box::new(tone))
-    }
-
-    fn handle_table(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut table = Table {
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 0,
-        };
-        self.file.read_exact(bytemuck::cast_slice_mut(&mut table))?;
-        Ok(Box::new(table))
-    }
-
-    fn handle_true(&mut self) -> io::Result<Box<dyn Any>> {
-        Ok(Box::new(true))
-    }
-
-    fn handle_user_defined(&mut self) -> io::Result<Box<dyn Any>> {
-        let type_name_as_bytes = self.parse()?;
-        let type_name = match type_name_as_bytes.downcast_ref::<Vec<u8>>() {
-            Some(vec) => String::from_utf8_lossy(vec).into_owned(),
-            None => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "UserDef name not Symbol",
-                ))
-            }
-        };
-
-        match type_name.as_str() {
-            "Color" => self.handle_color(),
-            "Table" => self.handle_table(),
-            "Tone" => self.handle_tone(),
-            _ => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Unsupported user defined class: {}", type_name),
-            )),
-        }
-    }
-
-    fn handle_user_marshall(&mut self) -> io::Result<Box<dyn Any>> {
-        let mut buf = [0; 1];
-        self.file.read_exact(&mut buf)?;
-        let data = buf[0];
-        println!("User marshalled data: {}", data);
-        Ok(Box::new(data))
     }
 }
